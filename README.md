@@ -136,6 +136,18 @@ python3 img2heic_sips_tuned_final.py "/Volumes/T7/pic"
 
 ---
 
+## Extra utilities
+
+- `bench_heic_compare_fixed.py`：基准对比 sips 与 heif-enc 的 HEIC 输出，可生成 CSV/JSON/HTML；支持“标定模式”按 SSIM 阈值寻找最优 quality。
+  - 示例：`python3 bench_heic_compare_fixed.py --src ./testset --out ./bench_out --methods sips,heif-enc --csv result.csv --html report.html`
+  - 标定：`python3 bench_heic_compare_fixed.py --src ./testset --out ./bench_out --calibrate sips --qualities 55 65 75 85 90 95 --ssim 0.97 --csv cal.csv --json cal.json`
+- `compare_stems.py`：对比两个目录的“文件名主干”（忽略 jpg/jpeg/png/heic 后缀），列出只存在于一侧的文件列表。
+  - 示例：`python3 compare_stems.py dirA dirB [--no-recursive] [--ignore-case]`
+- `clone_missing.py`：基于 `compare_stems` 结果，把缺失的一侧文件 clone/copy 到目标目录（保留目录结构，优先 APFS clone，失败回退复制）。
+  - 示例：`python3 clone_missing.py --which B dirA dirB /path/to/target [--no-recursive] [--ignore-case] [--dry-run] [--verbose]`
+
+---
+
 ## Output layout
 
 The output folder mirrors the input structure.
