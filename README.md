@@ -22,6 +22,7 @@ The script is designed for **photo library cleanup**: generate a safe archive co
 - Multi-process acceleration (`--threads`)
 - Optional **SSIM verification** (`--verify-ssim`) with auto quality escalation
 - Generates a **conversion report** (`conversion_report.html`)
+- Smart defaults for external drives: small CPU concurrency, large prefetch batches, optional skip non-images
 
 ---
 
@@ -71,20 +72,20 @@ pip install pillow-heif scikit-image
 
 ## Quick start
 
-### 1) Basic usage (recommended)
+### 1) 最简交互（推荐）
+
+```bash
+python3 img2heic_sips_tuned_final.py
+# 运行后会提示输入源目录，输出默认：<SRC>_out
+```
+
+### 2) 显式指定输入/输出
 
 ```bash
 python3 img2heic_sips_tuned_final.py "/path/to/SRC" "/path/to/OUT"
 ```
 
-### 2) Let the script choose the default OUT folder
-
-```bash
-python3 img2heic_sips_tuned_final.py "/path/to/SRC"
-# OUT defaults to: /path/to/SRC_archived
-```
-
-### 3) Strict transparent-asset safety
+### 3) 严格透明度保护
 
 If you store lots of transparent PNG assets (icons, stickers, design exports):
 
@@ -92,15 +93,46 @@ If you store lots of transparent PNG assets (icons, stickers, design exports):
 python3 img2heic_sips_tuned_final.py SRC OUT --disallow-alpha-drop
 ```
 
-### 4) Quality assurance with SSIM (slower, more robust)
+### 4) 质量保障：SSIM（更慢）
 
 ```bash
 python3 img2heic_sips_tuned_final.py SRC OUT \
-  --disallow-alpha-drop \
+  --disallow-alpha-drop \  # 默认已开启
   --verify-ssim \
   --ssim-threshold 0.97 \
   --quality-ladder 55,65,75,85,90
 ```
+
+### 5) 外置盘加速（预拷到本地）
+
+外置盘路径（在 `/Volumes/...`）会自动启用预拷，默认批次：8G / 400 张，预拷目录默认 `~/Downloads/img2heic_temp`。
+
+```bash
+python3 img2heic_sips_tuned_final.py "/Volumes/T7/pic"
+# 如需自定义：
+# --threads 2              # 默认 2，更友好外置盘
+# --precache-bytes 8G      # 每批大小
+# --precache-files 400     # 每批文件数
+# --precache-dir ~/Downloads/img2heic_temp_run2
+# --no-precache            # 禁用预拷
+```
+
+### 6) 非图片文件
+
+- 默认会处理非图片（保留到输出目录），同卷 APFS 下优先 clone（`cp -c`），失败再复制。
+- 若只想处理图片，显式加 `--skip-non-images`。
+
+---
+
+## Defaults & paths
+
+- 并行度：默认 `--threads 2`（外置盘友好），可自行调高。
+- 预拷：源在 `/Volumes/...` 时自动开启，默认批次 8G / 400 张，临时目录 `~/Downloads/img2heic_temp`。
+- 日志：`~/Downloads/img2heic_log/heic_conversion.log`（可用环境变量 `IMG2HEIC_LOG_DIR` 覆盖）。
+- 输出：未指定时为 `<SRC>_out`，保留原目录结构。
+- 进度文件：`<OUT>/.conversion_progress.json`，便于断点续传。
+
+> 并行跑多份脚本时，请为每份指定独立的 `--out` / `--precache-dir` / `IMG2HEIC_LOG_DIR`，避免互相覆盖。
 
 ---
 

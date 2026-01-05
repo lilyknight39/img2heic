@@ -161,7 +161,9 @@ except ImportError:
 SRC: Optional[Path] = None
 ARCHIVE: Optional[Path] = None
 THREADS: Optional[int] = None
-LOG_FILE = Path.cwd() / "heic_conversion.log"
+LOG_DIR = Path(os.environ.get("IMG2HEIC_LOG_DIR", str(Path.home() / "Downloads" / "img2heic_log"))).expanduser()
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+LOG_FILE = LOG_DIR / "heic_conversion.log"
 PROGRESS_FILE: Optional[Path] = None
 REPORT_FILE: Optional[Path] = None
 
@@ -197,7 +199,52 @@ DEFAULT_QUALITY = 55
 QUALITY_LADDER = [55, 65, 75, 85, 90]
 SSIM_THRESHOLD = 0.97
 VERIFY_SSIM = False
-ALLOW_ALPHA_DROP_IF_OPAQUE = True
+ALLOW_ALPHA_DROP_IF_OPAQUE = False
+DEFAULT_PRECACHE_BYTES = 8 * 1024 * 1024 * 1024
+DEFAULT_PRECACHE_FILES = 400
+DEFAULT_PRECACHE_ROOT = Path.home() / "Downloads" / "img2heic_temp"
+
+
+def _strip_outer_quotes(value: str) -> str:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        return value[1:-1].strip()
+    return value
+
+
+def _parse_size_bytes(value: str) -> int:
+    text = value.strip().lower()
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)([kmgt]?)b?", text)
+    if not m:
+        raise ValueError(f"无法解析大小: {value}")
+    num = float(m.group(1))
+    unit = m.group(2)
+    scale = {"": 1, "k": 1024, "m": 1024**2, "g": 1024**3, "t": 1024**4}[unit]
+    return int(num * scale)
+
+
+def _normalize_work_item(item) -> tuple[Path, Path, bool]:
+    if isinstance(item, (tuple, list)) and len(item) >= 2:
+        src = Path(item[0])
+        inp = Path(item[1])
+        return src, inp, True
+    src = Path(item)
+    return src, src, False
+
+
+def _is_external_volume(path: Path) -> bool:
+    parts = path.resolve().parts
+    return len(parts) >= 2 and parts[0] == os.sep and parts[1] == "Volumes"
+
+
+def _copy_with_clone(src: Path, dst: Path) -> None:
+    try:
+        res = subprocess.run(["/bin/cp", "-c", str(src), str(dst)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if res.returncode == 0:
+            return
+    except Exception:
+        pass
+    shutil.copy2(src, dst)
 
 def tuned_default_quality(real_format: str, has_alpha: bool, pixels: int, filesize: int) -> int:
     """基于你的标定集拟合出的默认质量策略（不开 --verify-ssim 时使用）。
@@ -382,7 +429,7 @@ def test_quality_samples(sample_pairs: list) -> dict:
 # ------------------------------
 # 文件处理函数
 # ------------------------------
-def process_file(f: Path):
+def process_file(item):
     stats = {
         "total": 1, 
         "converted": 0, 
@@ -392,6 +439,7 @@ def process_file(f: Path):
         "compression_ratios": [],
         "sample_pair": None  # (original_path, heic_path) for SSIM testing
     }
+    f, input_path, _ = _normalize_work_item(item)
     ext = f.suffix.lower()
     rel_path = f.relative_to(SRC)
 
@@ -406,7 +454,7 @@ def process_file(f: Path):
         out_file = ARCHIVE / rel_path
         out_file.parent.mkdir(parents=True, exist_ok=True)
         if not out_file.exists():
-            shutil.copy2(f, out_file)
+            _copy_with_clone(f, out_file)
             preserve_times(f, out_file)
             stats["copied"] = 1
             logging.info(f"COPY - {f} → {out_file}")
@@ -414,7 +462,7 @@ def process_file(f: Path):
 
     # 文件头校验：防止后缀名被误改
     # 文件头校验：防止后缀名被误改；若可识别则自动修复后重试
-    real_format = detect_real_format(f)
+    real_format = detect_real_format(input_path)
     if real_format is None:
         logging.warning(f"SKIP - {f} (无法识别文件头，可能不是有效图片)")
         return stats, None, str(f)
@@ -430,7 +478,7 @@ def process_file(f: Path):
         try:
             with tempfile.NamedTemporaryFile(prefix=f.stem + "_", suffix=want_suffix, delete=False) as tmp:
                 tmp_path = Path(tmp.name)
-            shutil.copy2(f, tmp_path)
+            shutil.copy2(input_path, tmp_path)
             input_path = tmp_path
             logging.info(f"FIX_SUFFIX - {f} (后缀 {ext} / 实际 {real_format} → 临时 {want_suffix})")
         except Exception as e:
@@ -453,9 +501,9 @@ def process_file(f: Path):
         logging.info(f"SKIP_EXISTS - {f} (已转换)")
         return stats, None, str(f)
     
-    filesize = f.stat().st_size
+    filesize = input_path.stat().st_size
 
-    info = fast_image_info(f, real_format)
+    info = fast_image_info(input_path, real_format)
     if info is None:
         logging.error(f"ERROR - {f} 无法打开/解析尺寸")
         return stats, f, str(f)
@@ -507,7 +555,7 @@ def process_file(f: Path):
                 out_file.unlink()
             except Exception:
                 pass
-            shutil.copy2(f, ARCHIVE / rel_path)
+            _copy_with_clone(f, ARCHIVE / rel_path)
             preserve_times(f, ARCHIVE / rel_path)
             stats['heic_larger'] += 1  # 复用计数：最终仍保留原图
             logging.info(f"KEEP_ORIGINAL - {f} (输入含透明但输出丢失 alpha，保留原文件)")
@@ -519,7 +567,7 @@ def process_file(f: Path):
     if heic_size >= filesize:
         out_file.unlink()
         # HEIC 比原文件大时，复制原文件保留
-        shutil.copy2(f, ARCHIVE / rel_path)
+        _copy_with_clone(f, ARCHIVE / rel_path)
         preserve_times(f, ARCHIVE / rel_path)
         stats["heic_larger"] += 1
         logging.info(f"KEEP_ORIGINAL - {f} (HEIC 更大，保留原文件)")
@@ -823,33 +871,45 @@ def init_worker(src: str, archive: str, progress_file: str, report_file: str):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='批量图片转 HEIC（macOS sips 版）')
     parser.add_argument('src', nargs='?', help='源文件夹路径（不传则交互输入）')
-    parser.add_argument('out', nargs='?', help='输出文件夹路径（不传则默认：源同级 + _archived）')
-    parser.add_argument('--threads', type=int, default=None, help='并行进程数（默认：4~8 之间自适应）')
+    parser.add_argument('out', nargs='?', help='输出文件夹路径（不传则默认：源目录后缀加 _out）')
+    parser.add_argument('--threads', type=int, default=2, help='并行进程数（默认：2，小并发更友好外置盘）')
     parser.add_argument('--default-quality', type=int, default=DEFAULT_QUALITY, help='默认 sips formatOptions（不启用 SSIM 校验时使用）')
     parser.add_argument('--quality-ladder', type=str, default=",".join(str(x) for x in QUALITY_LADDER), help='SSIM 校验时的质量阶梯，例如 55,65,75,85,90')
-    parser.add_argument('--verify-ssim', action='store_true', help='对每张图进行 SSIM 校验，不达标则自动升档（更慢但更稳）')
+    parser.add_argument('--verify-ssim', action='store_true', default=False, help='对每张图进行 SSIM 校验，不达标则自动升档（更慢但更稳）')
+    parser.add_argument('--no-verify-ssim', action='store_false', dest='verify_ssim', help='关闭 SSIM 校验')
     parser.add_argument('--ssim-threshold', type=float, default=SSIM_THRESHOLD, help='SSIM 门槛（配合 --verify-ssim）')
-    parser.add_argument('--disallow-alpha-drop', action='store_true', help='只要输入带 alpha，就要求输出也带 alpha（即使 alpha 实际全不透明）')
+    parser.add_argument('--disallow-alpha-drop', action='store_true', default=True, help='只要输入带 alpha，就要求输出也带 alpha（即使 alpha 实际全不透明）')
+    parser.add_argument('--allow-alpha-drop', action='store_false', dest='disallow_alpha_drop', help='允许在 alpha 实际全不透明时丢弃 alpha')
+    parser.add_argument('--precache', action='store_true', default=None, help='将图片批量预拷贝到本地临时目录后再处理（外置盘默认自动开启）')
+    parser.add_argument('--no-precache', action='store_false', dest='precache', help='禁用预拷模式')
+    parser.add_argument('--precache-bytes', type=str, default=None, help='每批预拷贝总大小（如 8G/500M），默认 8G')
+    parser.add_argument('--precache-files', type=int, default=None, help='每批预拷贝文件数上限，默认 400')
+    parser.add_argument('--precache-dir', type=str, default=str(DEFAULT_PRECACHE_ROOT), help='预拷贝临时目录根路径（默认 ~/Downloads/img2heic_temp）')
+    parser.add_argument('--skip-non-images', action='store_true', default=False, help='跳过非图片文件，仅处理图片（默认关闭）')
     args = parser.parse_args()
 
     # ------------------------------
     # 解析参数 / 兼容交互输入
     # ------------------------------
-    src_input = args.src
+    src_input = _strip_outer_quotes(args.src) if args.src else None
     while not src_input:
-        src_input = input('请输入源文件夹路径: ').strip()
+        src_input = _strip_outer_quotes(input('请输入源文件夹路径: '))
     SRC = Path(src_input).resolve()
     if not SRC.is_dir():
         raise SystemExit('输入路径不存在或不是文件夹')
 
-    ARCHIVE = Path(args.out).resolve() if args.out else (SRC.parent / f'{SRC.name}_archived')
+    if args.out:
+        out_input = _strip_outer_quotes(args.out)
+        ARCHIVE = Path(out_input).resolve()
+    else:
+        ARCHIVE = SRC.parent / f"{SRC.name}_out"
     ARCHIVE.mkdir(parents=True, exist_ok=True)
 
     if SIPS is None:
         raise SystemExit('未找到 sips（macOS 自带）。请确认系统环境或 PATH。')
 
     # 并行度
-    THREADS = args.threads if args.threads else max(4, min(8, cpu_count()))
+    THREADS = args.threads if args.threads else min(4, cpu_count())
 
     # 质量策略全局覆盖
     DEFAULT_QUALITY = int(args.default_quality)
@@ -860,6 +920,20 @@ if __name__ == "__main__":
 
     PROGRESS_FILE = ARCHIVE / '.conversion_progress.json'
     REPORT_FILE = ARCHIVE / 'conversion_report.html'
+    auto_precache = _is_external_volume(SRC)
+    if args.precache is False:
+        precache_enabled = False
+    else:
+        precache_enabled = bool(args.precache or args.precache_bytes or args.precache_files or auto_precache)
+    precache_bytes = DEFAULT_PRECACHE_BYTES
+    precache_files = DEFAULT_PRECACHE_FILES
+    precache_root = Path(_strip_outer_quotes(args.precache_dir)).expanduser()
+    if precache_enabled:
+        if args.precache_bytes is not None:
+            precache_bytes = _parse_size_bytes(args.precache_bytes)
+        if args.precache_files is not None:
+            precache_files = int(args.precache_files)
+        precache_root = precache_root.resolve()
     # ------------------------------
     # 扫描待处理文件（支持断点续传）
     # ------------------------------
@@ -874,7 +948,7 @@ if __name__ == "__main__":
         "skipped_symlink": 0,
         "compression_ratios": [],
     }
-    save_interval = 50
+    save_interval = 500
 
     # 收集文件列表（仅文件；若输出目录在源目录内则自动排除）
     all_files: list[Path] = []
@@ -888,7 +962,12 @@ if __name__ == "__main__":
             continue
         all_files.append(f)
 
-    total_count = len(all_files)
+    processing_files = [
+        f for f in all_files
+        if (not args.skip_non_images) or f.suffix.lower() in IMAGE_EXTENSIONS or f.is_symlink()
+    ]
+
+    total_count = len(processing_files)
     if total_count == 0:
         print("✅ 没有发现需要处理的新文件（可能都已在进度文件中记录）。")
         print(f"输出目录: {ARCHIVE}")
@@ -897,35 +976,126 @@ if __name__ == "__main__":
 
     print(f"将处理 {total_count} 个文件（已跳过 {len(processed_files)} 个已处理文件）。")
 
+    processed_counter = [0]
+    precache_copied_files = [0]
+    precache_copied_bytes = [0]
+    precache_batches = [0]
+
+    def handle_result(stats_result, failed, processed_path):
+        total_stats["total"] += stats_result["total"]
+        total_stats["converted"] += stats_result["converted"]
+        total_stats["heic_larger"] += stats_result["heic_larger"]
+        total_stats["copied"] += stats_result.get("copied", 0)
+        total_stats["skipped_symlink"] += stats_result.get("skipped_symlink", 0)
+        total_stats["compression_ratios"].extend(stats_result["compression_ratios"])
+        if stats_result.get("sample_pair") and SSIM_AVAILABLE:
+            sample_pairs.append(stats_result["sample_pair"])
+        if failed:
+            failed_files.append(failed)
+        processed_files.add(processed_path)
+        processed_counter[0] += 1
+        if processed_counter[0] % save_interval == 0:
+            save_progress(processed_files)
+            if precache_enabled:
+                written_back = total_stats["converted"] + total_stats["heic_larger"] + total_stats["copied"]
+                tqdm.write(
+                    f"[PRECACHE_STATUS] temp_copied_files={precache_copied_files[0]} "
+                    f"temp_copied_bytes={precache_copied_bytes[0]} "
+                    f"batches={precache_batches[0]} "
+                    f"processed={processed_counter[0]} "
+                    f"written_back={written_back}"
+                )
+                logging.info(
+                    "PRECACHE_STATUS - temp_copied_files=%s temp_copied_bytes=%s batches=%s processed=%s written_back=%s",
+                    precache_copied_files[0],
+                    precache_copied_bytes[0],
+                    precache_batches[0],
+                    processed_counter[0],
+                    written_back,
+                )
 
     with Pool(
         THREADS,
         initializer=init_worker,
         initargs=(str(SRC), str(ARCHIVE), str(PROGRESS_FILE), str(REPORT_FILE))
     ) as pool:
-        for i, (stats_result, failed, processed_path) in enumerate(
-            tqdm(pool.imap_unordered(process_file, all_files), total=total_count, desc="转换进度", ncols=80)
-        ):
-            total_stats["total"] += stats_result["total"]
-            total_stats["converted"] += stats_result["converted"]
-            total_stats["heic_larger"] += stats_result["heic_larger"]
-            total_stats["copied"] += stats_result.get("copied", 0)
-            total_stats["skipped_symlink"] += stats_result.get("skipped_symlink", 0)
-            total_stats["compression_ratios"].extend(stats_result["compression_ratios"])
-            
-            # 收集 SSIM 测试样本
-            if stats_result.get("sample_pair") and SSIM_AVAILABLE:
-                sample_pairs.append(stats_result["sample_pair"])
-            
-            if failed:
-                failed_files.append(failed)
-            
-            # 记录已处理文件
-            processed_files.add(processed_path)
-            
-            # 定期保存进度
-            if (i + 1) % save_interval == 0:
-                save_progress(processed_files)
+        pbar = tqdm(total=total_count, desc="转换进度", ncols=80)
+        if not precache_enabled:
+            for stats_result, failed, processed_path in pool.imap_unordered(process_file, processing_files):
+                handle_result(stats_result, failed, processed_path)
+                pbar.update(1)
+        else:
+            run_root = precache_root / datetime.now().strftime("precache_%Y%m%d_%H%M%S")
+            run_root.mkdir(parents=True, exist_ok=True)
+            direct_files: list[Path] = []
+            image_files: list[Path] = []
+            for f in processing_files:
+                if f.is_symlink():
+                    direct_files.append(f)
+                elif f.suffix.lower() in IMAGE_EXTENSIONS:
+                    image_files.append(f)
+                else:
+                    direct_files.append(f)
+
+            batch: list[Path] = []
+            batch_bytes = 0
+            batch_index = 0
+
+            def flush_batch(batch_files: list[Path], batch_id: int):
+                batch_dir = run_root / f"batch_{batch_id:04d}"
+                batch_dir.mkdir(parents=True, exist_ok=True)
+                work_items = []
+                batch_total_bytes = 0
+                for bf in batch_files:
+                    rel = bf.relative_to(SRC)
+                    tmp_file = batch_dir / rel
+                    tmp_file.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(bf, tmp_file)
+                    work_items.append((bf, tmp_file))
+                    try:
+                        batch_total_bytes += bf.stat().st_size
+                    except Exception:
+                        pass
+                precache_copied_files[0] += len(batch_files)
+                precache_copied_bytes[0] += batch_total_bytes
+                precache_batches[0] += 1
+                tqdm.write(
+                    f"[PRECACHE_BATCH] batch={batch_id} files={len(batch_files)} bytes={batch_total_bytes} "
+                    f"total_files={precache_copied_files[0]} total_bytes={precache_copied_bytes[0]}"
+                )
+                logging.info(
+                    "PRECACHE_BATCH - batch=%s files=%s bytes=%s total_files=%s total_bytes=%s",
+                    batch_id,
+                    len(batch_files),
+                    batch_total_bytes,
+                    precache_copied_files[0],
+                    precache_copied_bytes[0],
+                )
+                for stats_result, failed, processed_path in pool.imap_unordered(process_file, work_items):
+                    handle_result(stats_result, failed, processed_path)
+                    pbar.update(1)
+                shutil.rmtree(batch_dir, ignore_errors=True)
+
+            for f in image_files:
+                try:
+                    f_size = f.stat().st_size
+                except Exception:
+                    f_size = 0
+                if batch and ((precache_files and len(batch) >= precache_files) or (precache_bytes and batch_bytes + f_size > precache_bytes)):
+                    flush_batch(batch, batch_index)
+                    batch_index += 1
+                    batch = []
+                    batch_bytes = 0
+                batch.append(f)
+                batch_bytes += f_size
+            if batch:
+                flush_batch(batch, batch_index)
+            shutil.rmtree(run_root, ignore_errors=True)
+            if direct_files and (not args.skip_non_images):
+                for stats_result, failed, processed_path in pool.imap_unordered(process_file, direct_files):
+                    handle_result(stats_result, failed, processed_path)
+                    pbar.update(1)
+            pbar.close()
 
     # 最终保存进度
     save_progress(processed_files)
