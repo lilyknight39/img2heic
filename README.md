@@ -72,20 +72,20 @@ pip install pillow-heif scikit-image
 
 ## Quick start
 
-### 1) 最简交互（推荐）
+### 1) Minimal interactive (recommended)
 
 ```bash
 python3 img2heic_sips_tuned_final.py
-# 运行后会提示输入源目录，输出默认：<SRC>_out
+# Prompts for source; output defaults to <SRC>_out
 ```
 
-### 2) 显式指定输入/输出
+### 2) Explicitly set input/output
 
 ```bash
 python3 img2heic_sips_tuned_final.py "/path/to/SRC" "/path/to/OUT"
 ```
 
-### 3) 严格透明度保护
+### 3) Strict alpha protection
 
 If you store lots of transparent PNG assets (icons, stickers, design exports):
 
@@ -93,58 +93,58 @@ If you store lots of transparent PNG assets (icons, stickers, design exports):
 python3 img2heic_sips_tuned_final.py SRC OUT --disallow-alpha-drop
 ```
 
-### 4) 质量保障：SSIM（更慢）
+### 4) Quality assurance: SSIM (slower)
 
 ```bash
 python3 img2heic_sips_tuned_final.py SRC OUT \
-  --disallow-alpha-drop \  # 默认已开启
+  --disallow-alpha-drop \  # default on
   --verify-ssim \
   --ssim-threshold 0.97 \
   --quality-ladder 55,65,75,85,90
 ```
 
-### 5) 外置盘加速（预拷到本地）
+### 5) External drive speedup (precache to local)
 
-外置盘路径（在 `/Volumes/...`）会自动启用预拷，默认批次：8G / 400 张，预拷目录默认 `~/Downloads/img2heic_temp`。
+When the source is under `/Volumes/...`, precache is auto-enabled. Default batch: 8G / 400 files. Temp dir: `~/Downloads/img2heic_temp`.
 
 ```bash
 python3 img2heic_sips_tuned_final.py "/Volumes/T7/pic"
-# 如需自定义：
-# --threads 2              # 默认 2，更友好外置盘
-# --precache-bytes 8G      # 每批大小
-# --precache-files 400     # 每批文件数
+# Custom options:
+# --threads 2              # default 2, gentler on external drives
+# --precache-bytes 8G      # batch size
+# --precache-files 400     # batch file count
 # --precache-dir ~/Downloads/img2heic_temp_run2
-# --no-precache            # 禁用预拷
+# --no-precache            # disable precache
 ```
 
-### 6) 非图片文件
+### 6) Non-image files
 
-- 默认会处理非图片（保留到输出目录），同卷 APFS 下优先 clone（`cp -c`），失败再复制。
-- 若只想处理图片，显式加 `--skip-non-images`。
+- By default non-images are preserved to output; on the same APFS volume it prefers clone (`cp -c`), falling back to copy.
+- To process images only, add `--skip-non-images`.
 
 ---
 
 ## Defaults & paths
 
-- 并行度：默认 `--threads 2`（外置盘友好），可自行调高。
-- 预拷：源在 `/Volumes/...` 时自动开启，默认批次 8G / 400 张，临时目录 `~/Downloads/img2heic_temp`。
-- 日志：`~/Downloads/img2heic_log/heic_conversion.log`（可用环境变量 `IMG2HEIC_LOG_DIR` 覆盖）。
-- 输出：未指定时为 `<SRC>_out`，保留原目录结构。
-- 进度文件：`<OUT>/.conversion_progress.json`，便于断点续传。
+- Concurrency: default `--threads 2` (external-drive friendly); raise if local SSD.
+- Precache: auto-on when source under `/Volumes/...`, default batch 8G / 400 files, temp dir `~/Downloads/img2heic_temp`.
+- Logs: `~/Downloads/img2heic_log/heic_conversion.log` (override with `IMG2HEIC_LOG_DIR`).
+- Output: default `<SRC>_out`, structure preserved.
+- Progress: `<OUT>/.conversion_progress.json` for resume.
 
-> 并行跑多份脚本时，请为每份指定独立的 `--out` / `--precache-dir` / `IMG2HEIC_LOG_DIR`，避免互相覆盖。
+> Running multiple instances? Give each a distinct `--out` / `--precache-dir` / `IMG2HEIC_LOG_DIR` to avoid collisions.
 
 ---
 
 ## Extra utilities
 
-- `bench_heic_compare_fixed.py`：基准对比 sips 与 heif-enc 的 HEIC 输出，可生成 CSV/JSON/HTML；支持“标定模式”按 SSIM 阈值寻找最优 quality。
-  - 示例：`python3 bench_heic_compare_fixed.py --src ./testset --out ./bench_out --methods sips,heif-enc --csv result.csv --html report.html`
-  - 标定：`python3 bench_heic_compare_fixed.py --src ./testset --out ./bench_out --calibrate sips --qualities 55 65 75 85 90 95 --ssim 0.97 --csv cal.csv --json cal.json`
-- `compare_stems.py`：对比两个目录的“文件名主干”（忽略 jpg/jpeg/png/heic 后缀），列出只存在于一侧的文件列表。
-  - 示例：`python3 compare_stems.py dirA dirB [--no-recursive] [--ignore-case]`
-- `clone_missing.py`：基于 `compare_stems` 结果，把缺失的一侧文件 clone/copy 到目标目录（保留目录结构，优先 APFS clone，失败回退复制）。
-  - 示例：`python3 clone_missing.py --which B dirA dirB /path/to/target [--no-recursive] [--ignore-case] [--dry-run] [--verbose]`
+- `bench_heic_compare_fixed.py`: benchmark sips vs heif-enc, output CSV/JSON/HTML; “calibrate” mode finds minimal quality meeting SSIM threshold.
+  - Example: `python3 bench_heic_compare_fixed.py --src ./testset --out ./bench_out --methods sips,heif-enc --csv result.csv --html report.html`
+  - Calibrate: `python3 bench_heic_compare_fixed.py --src ./testset --out ./bench_out --calibrate sips --qualities 55 65 75 85 90 95 --ssim 0.97 --csv cal.csv --json cal.json`
+- `compare_stems.py`: compare two directories by filename stem (ignoring jpg/jpeg/png/heic suffixes), list files only in one side.
+  - Example: `python3 compare_stems.py dirA dirB [--no-recursive] [--ignore-case]`
+- `clone_missing.py`: using `compare_stems` results, clone/copy the missing-side files to a target directory (structure preserved; prefer APFS clone, fallback to copy).
+  - Example: `python3 clone_missing.py --which B dirA dirB /path/to/target [--no-recursive] [--ignore-case] [--dry-run] [--verbose]`
 
 ---
 
