@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>img2heic — conversion_report.html (example)</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; margin: 0; background:#f5f6f8; color:#111; }
+    header { background:#161b22; color:#fff; padding:18px 24px; font-size:18px; }
+    .wrap { max-width: 1100px; margin: 18px auto; padding: 0 16px; }
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+    .card { background:#fff; border:1px solid #dde1e7; border-radius:14px; padding:14px 16px; }
+    .card h3 { margin: 0 0 8px; font-size: 16px; }
+    pre { background:#0b1020; color:#e9eef8; padding:12px; border-radius:10px; overflow:auto; }
+    table { width:100%; border-collapse: collapse; background:#fff; border:1px solid #dde1e7; border-radius:14px; overflow:hidden; }
+    th, td { padding:10px 12px; border-bottom:1px solid #eef1f5; font-size: 13px; }
+    th { background:#f8fafc; text-align:left; }
+    .muted { color:#667085; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <header>img2heic — conversion_report.html (example)</header>
+  <div class="wrap">
+    <p class="muted">This is a lightweight example file for README preview. Your real report includes full per-file rows and charts.</p>
+    <div class="grid">
+      <div class="card"><h3>Summary</h3><div>Images processed: <b>18,992</b><br/>Net saved: <b>68.3 GB</b><br/>Median saved: <b>54%</b></div></div>
+      <div class="card"><h3>Safety rules</h3><div>HEIC larger: <b>1,203</b><br/>Alpha drop prevented: <b>37</b></div></div>
+      <div class="card"><h3>Performance</h3><div>Wall time: <b>19m 42s</b><br/>Workers: <b>8</b></div></div>
+    </div>
+    <h2>Sample rows</h2>
+    <table>
+      <thead><tr><th>Path</th><th>In</th><th>Out</th><th>Saved</th><th>Rule</th></tr></thead>
+      <tbody>
+        <tr><td>2024/Trip/IMG_1023.JPG</td><td>4.8 MB</td><td>1.9 MB</td><td>60%</td><td></td></tr>
+        <tr><td>2023/Screenshots/shot_778.png</td><td>1.2 MB</td><td>—</td><td>—</td><td>kept_original_heic_larger</td></tr>
+        <tr><td>Design/Logo.png</td><td>820 KB</td><td>—</td><td>—</td><td>kept_original_alpha_drop</td></tr>
+      </tbody>
+    </table>
+    <h2>Command</h2>
+    <pre>python3 img2heic_sips_tuned_final.py SRC OUT --disallow-alpha-drop --threads 8</pre>
+  </div>
+</body>
+</html>
